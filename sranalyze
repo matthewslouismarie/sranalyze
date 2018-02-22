@@ -1,54 +1,179 @@
 #!/usr/bin/env php
 <?php
 
+define('SAVILEROW', '-savilerow');
+define('MINION', '-minion');
+define('SAVILEROW_OUTPUT_FILENAME', 'savilerow.csv');
+define('MINION_OUTPUT_FILENAME', 'minion.csv');
+
 $headFileStr = file('.git/HEAD', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
 
 if (false === $headFileStr) {
     throw new Exception('Not a Git repository.');
 }
 
-define('OUTPUT_FILENAME', 'results.csv');
+if (!isset($argv[1])) {
+    throw new Exception('You need to specify the mode.');
+}
+
+if (!in_array($argv[1], [SAVILEROW, MINION], true)) {
+    throw new InvalidArgumentException('Invalid mode.');
+}
+
 define('BRANCH_NAME', $headFileStr[0]);
+define('MODE', $argv[1]);
 
-$optionsArray = [
-    '-O0',
-    '-O1',
-    '-O2',
-    '-O3',
-    '-deletevars',
-    '-aggregate',
-    '-nomappers',
-    '-minionmappers',
-    'solver-options "-preprocess SACBounds"'
-];
+if (MINION === MODE) {
+    minion();
+} elseif (SAVILEROW === MODE) {
+    savilerow();
+}
 
-foreach ($optionsArray as $currentOptionStr) {
-    exec("psavirelow gapPuzzle2.eprime gapPuzzle2.param {$currentOptionStr}");
-
-    $dotInfoArray = file('gapPuzzle2.param.info', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-
-    $parsedArray = [
-        'Branch' => BRANCH_NAME,
-        'Options' => $currentOptionStr,
+function minion()
+{
+    $varorderArray = [
+        '',
+        // '-varorder ldf-random',
+        '-varorder ldf',
+        // '-varorder random',
+        // '-varorder sdf-random',
+        '-varorder sdf',
+        '-varorder srf-random',
+        '-varorder srf',
+        '-varorder static'
     ];
 
-    foreach ($dotInfoArray as $currentLineStr) {
-        $currentLineArray = explode(':', $currentLineStr);
-        $parsedArray[$currentLineArray[0]] = $currentLineArray[1];
-    }
+    $preprocessArray = [
+        '',
+        '-preprocess GAC',
+        '-preprocess SAC',
+        '-preprocess SACBounds',
+        // '-preprocess SSAC',
+        // '-preprocess SSACBounds',
+    ];
 
-    $parsedStr = '';
-    if (!file_exists(OUTPUT_FILENAME)) {
-        foreach ($parsedArray as $currentColumn => $currentValue) {
-            $parsedStr .= "{$currentColumn},";
+    $propnodeArray = [
+        '',
+        '-prop-node GAC',
+        '-prop-node SAC',
+        '-prop-node SACBounds',
+        '-prop-node SSAC',
+        '-prop-node SSACBounds',
+    ];
+
+    $optionsArray = [];
+    // foreach ($propnodeArray as $currentPropnodeStr) {
+        foreach ($varorderArray as $currentVarorderStr) {
+            foreach ($preprocessArray as $currentPreprocessStr) {
+                $optionsArray[] = "{$currentVarorderStr} {$currentPreprocessStr}";
+            }
         }
-        $parsedStr .= "\n";
-    }
+    // }
 
-    foreach ($parsedArray as $currentValue) {
-        $parsedStr .= "{$currentValue},";
-    }
-    $parsedStr .= "\n";
+    foreach ($optionsArray as $currentOptionStr) {
+        $results = [];
+        $parsedArray = [];
 
-    file_put_contents(OUTPUT_FILENAME, $parsedStr, FILE_APPEND);
+        $commandStr = "minion {$currentOptionStr} gapPuzzle2.param.minion";
+        echo "{$commandStr}\n";
+        exec("{$commandStr}", $results);
+
+        $parsedArray['Options'] = $currentOptionStr;
+        $parsedArray['Using seed'] = 'N/A';
+
+        foreach ($results as $currentLineStr) {
+            $currentLineArray = explode(':', $currentLineStr);
+            if (2 === count($currentLineArray)) {
+                $parsedArray[$currentLineArray[0]] = $currentLineArray[1];
+            }
+        }
+
+        unset($parsedArray['# HG version']);
+        unset($parsedArray['# HG last changed date']);
+        unset($parsedArray['#  Run at']);
+        unset($parsedArray['']);
+        unset($parsedArray['#    http']);
+        unset($parsedArray['# Input filename']);
+        unset($parsedArray['# Command line']);
+        append(MINION_OUTPUT_FILENAME, $parsedArray);
+    }
+}
+
+function savileRow()
+{
+    $srOptionsArray = [
+        '',
+        '-O0',
+        '-O1',
+        '-O2',
+        '-O3',
+        '-deletevars',
+        '-aggregate',
+        '-nomappers',
+        '-minionmappers',
+    ];
+
+    foreach ($srOptionsArray as $currentOptionStr) {
+        exec("savilerow gapPuzzle2.eprime gapPuzzle2.param {$currentOptionStr}");
+
+        $dotInfoArray = file('gapPuzzle2.param.info', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+
+        $parsedArray = [
+            'Branch' => BRANCH_NAME,
+            'Options' => $currentOptionStr,
+        ];
+
+        foreach ($dotInfoArray as $currentLineStr) {
+            $currentLineArray = explode(':', $currentLineStr);
+            $parsedArray[$currentLineArray[0]] = $currentLineArray[1];
+        }
+
+        append(SAVILEROW_OUTPUT_FILENAME, $parsedArray);
+    }
+}
+
+function append(string $filename, array $array)
+{
+    $file = null;
+    try {
+        $file = fopen($filename, 'c+');
+        if (false === $file) {
+            throw new Exception('Could not open or create output CSV file.');
+        }
+        $csvHeaderArray = str_getcsv(fgets($file));
+        $csvHeaderInitialLength = count($csvHeaderArray);
+
+        foreach ($array as $keyStr => $valueStr) {
+            if (!in_array($keyStr, $csvHeaderArray, true)) {
+                $csvHeaderArray[] = $keyStr;
+            }
+        }
+
+        if (count($csvHeaderArray) !== $csvHeaderInitialLength) {
+            rewind($file);
+            $headerUpdatedBool = fputcsv($file, $csvHeaderArray);
+            if (false === $headerUpdatedBool) {
+                throw new Exception('Could not update CSV header.');
+            }
+        }
+
+        $appendedArray = [];
+        foreach ($csvHeaderArray as $csvColumnNameStr) {
+            $appendedArray[] = $array[$csvColumnNameStr] ?? 'Undefined';
+        }
+
+        $fseekCodeInt = fseek($file, 0, SEEK_END);
+        if (-1 === $fseekCodeInt) {
+            throw new Exception('Could not move pointer to the end of the CSV file.');
+        }
+        $fwriteCodeInt = fputcsv($file, $appendedArray);
+        if (false === $fwriteCodeInt) {
+            throw new Exception('Could not append line to CSV');
+        }
+    }
+    finally {
+        if (null !== $file) {
+            fclose($file);
+        }
+    }
 }
