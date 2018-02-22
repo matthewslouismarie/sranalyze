@@ -1,0 +1,54 @@
+#!/usr/bin/env php
+<?php
+
+$headFileStr = file('.git/HEAD', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+
+if (false === $headFileStr) {
+    throw new Exception('Not a Git repository.');
+}
+
+define('OUTPUT_FILENAME', 'results.csv');
+define('BRANCH_NAME', $headFileStr[0]);
+
+$optionsArray = [
+    '-O0',
+    '-O1',
+    '-O2',
+    '-O3',
+    '-deletevars',
+    '-aggregate',
+    '-nomappers',
+    '-minionmappers',
+    'solver-options "-preprocess SACBounds"'
+];
+
+foreach ($optionsArray as $currentOptionStr) {
+    exec("psavirelow gapPuzzle2.eprime gapPuzzle2.param {$currentOptionStr}");
+
+    $dotInfoArray = file('gapPuzzle2.param.info', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+
+    $parsedArray = [
+        'Branch' => BRANCH_NAME,
+        'Options' => $currentOptionStr,
+    ];
+
+    foreach ($dotInfoArray as $currentLineStr) {
+        $currentLineArray = explode(':', $currentLineStr);
+        $parsedArray[$currentLineArray[0]] = $currentLineArray[1];
+    }
+
+    $parsedStr = '';
+    if (!file_exists(OUTPUT_FILENAME)) {
+        foreach ($parsedArray as $currentColumn => $currentValue) {
+            $parsedStr .= "{$currentColumn},";
+        }
+        $parsedStr .= "\n";
+    }
+
+    foreach ($parsedArray as $currentValue) {
+        $parsedStr .= "{$currentValue},";
+    }
+    $parsedStr .= "\n";
+
+    file_put_contents(OUTPUT_FILENAME, $parsedStr, FILE_APPEND);
+}
